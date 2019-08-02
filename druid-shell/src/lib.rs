@@ -45,6 +45,11 @@ pub mod mac;
 #[cfg(target_os = "macos")]
 pub use mac as platform;
 
+#[cfg(target_os = "linux")]
+pub mod x11;
+#[cfg(target_os = "linux")]
+pub use x11 as platform;
+
 pub use error::Error;
 
 pub use platform::application;
