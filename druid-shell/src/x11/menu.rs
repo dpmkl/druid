@@ -14,7 +14,7 @@
 
 //! x11 implementation of menus.
 
-use crate::keycodes::{MenuKey};
+use crate::keycodes::MenuKey;
 
 pub struct Menu;
 

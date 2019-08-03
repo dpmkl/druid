@@ -14,7 +14,6 @@
 
 //! File open/save dialogs, x11 implementation.
 
-
 /// Type of file dialog.
 pub enum FileDialogType {
     /// File open dialog.
@@ -28,7 +27,5 @@ pub enum FileDialogType {
 pub struct FileDialogOptions;
 
 impl FileDialogOptions {
-    pub fn set_show_hidden(&mut self) {
-        
-    }
+    pub fn set_show_hidden(&mut self) {}
 }

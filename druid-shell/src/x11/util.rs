@@ -15,4 +15,3 @@
 //! Utilities, x11 specific.
 
 pub fn init() {}
-

@@ -23,19 +23,37 @@ pub mod win_main;
 pub use menu::Menu;
 
 use std::any::Any;
+use std::cell::RefCell;
+use std::ffi::CString;
 use std::ffi::OsString;
+use std::mem;
+use std::os::raw::*;
+use std::ptr;
+use x11_dl::xlib;
+use x11_dl::xlib::Display;
 
 use crate::keyboard::{KeyEvent, KeyModifiers};
 use crate::platform::dialog::{FileDialogOptions, FileDialogType};
 use crate::window::{MouseButton, MouseEvent, WinHandler};
 use crate::Error;
 
+use crate::x11::win_main::{XLIB, XSESSION};
+
 #[derive(Clone, Default)]
-pub struct WindowHandle;
+pub struct WindowHandle {
+    display: Option<*mut Display>,
+    screen: i32,
+    root: u64,
+    window: u64,
+}
 
 impl WindowHandle {
     pub fn show(&self) {
-        unimplemented!()
+        unsafe {
+            if let Some(display) = self.display {
+                (XLIB.XMapWindow)(display, self.window);
+            }
+        }
     }
 
     pub fn close(&self) {
@@ -45,7 +63,7 @@ impl WindowHandle {
     pub fn invalidate(&self) {
         unimplemented!()
     }
-    
+
     pub fn get_idle_handle(&self) -> Option<IdleHandle> {
         unimplemented!()
     }
@@ -112,7 +130,55 @@ impl WindowBuilder {
     }
 
     pub fn build(self) -> Result<WindowHandle, Error> {
-        unimplemented!()
+        unsafe {
+            let screen = (XLIB.XDefaultScreen)(XSESSION.display);
+            let root = (XLIB.XRootWindow)(XSESSION.display, screen);
+
+            let mut attributes: xlib::XSetWindowAttributes = mem::uninitialized();
+            attributes.background_pixel = (XLIB.XWhitePixel)(XSESSION.display, screen);
+
+            let window = (XLIB.XCreateWindow)(
+                XSESSION.display,
+                root,
+                0,
+                0,
+                400,
+                300,
+                0,
+                0,
+                xlib::InputOutput as c_uint,
+                ptr::null_mut(),
+                xlib::CWBackPixel,
+                &mut attributes,
+            );
+
+            let title_str = CString::new(self.title).unwrap();
+            (XLIB.XStoreName)(XSESSION.display, window, title_str.as_ptr() as *mut c_char);
+
+            let wm_protocols_str = CString::new("WM_PROTOCOLS").unwrap();
+            let wm_delete_window_str = CString::new("WM_DELETE_WINDOW").unwrap();
+
+            let wm_protocols =
+                (XLIB.XInternAtom)(XSESSION.display, wm_protocols_str.as_ptr(), xlib::False);
+            let wm_delete_window =
+                (XLIB.XInternAtom)(XSESSION.display, wm_delete_window_str.as_ptr(), xlib::False);
+
+            let mut protocols = [wm_delete_window];
+
+            (XLIB.XSetWMProtocols)(
+                XSESSION.display,
+                window,
+                protocols.as_mut_ptr(),
+                protocols.len() as c_int,
+            );
+
+            Ok(WindowHandle {
+                display: Some(XSESSION.display),
+                screen,
+                root,
+                window,
+            })
+        }
     }
 }
 
