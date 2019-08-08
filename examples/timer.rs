@@ -12,23 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! An example of an animating widget.
+//! An example of a timer.
 
-use std::f64::consts::PI;
+use std::time::{Duration, Instant};
 
-use druid::kurbo::{Line, Point, Size, Vec2};
+use druid::kurbo::{Line, Size};
 use druid::piet::{Color, RenderContext};
 use druid::shell::{runloop, WindowBuilder};
 use druid::{
-    Action, BaseState, BoxConstraints, Env, Event, EventCtx, LayoutCtx, PaintCtx, UpdateCtx, Widget,
+    Action, BaseState, BoxConstraints, Env, Event, EventCtx, LayoutCtx, PaintCtx, TimerToken,
+    UpdateCtx, Widget,
 };
 use druid::{UiMain, UiState};
 
-struct AnimWidget {
-    t: f64,
+struct TimerWidget {
+    timer_id: TimerToken,
+    on: bool,
 }
 
-impl Widget<u32> for AnimWidget {
+impl Widget<u32> for TimerWidget {
     fn paint(
         &mut self,
         paint_ctx: &mut PaintCtx,
@@ -36,10 +38,10 @@ impl Widget<u32> for AnimWidget {
         _data: &u32,
         _env: &Env,
     ) {
-        let center = Point::new(50.0, 50.0);
-        let ambit = center + 45.0 * Vec2::from_angle((0.75 + self.t) * 2.0 * PI);
-        let brush = paint_ctx.solid_brush(Color::WHITE);
-        paint_ctx.stroke(Line::new(center, ambit), &brush, 1.0, None);
+        if self.on {
+            let brush = paint_ctx.solid_brush(Color::WHITE);
+            paint_ctx.stroke(Line::new((10.0, 10.0), (10.0, 50.0)), &brush, 1.0, None);
+        }
     }
 
     fn layout(
@@ -61,17 +63,18 @@ impl Widget<u32> for AnimWidget {
     ) -> Option<Action> {
         match event {
             Event::MouseDown(_) => {
-                self.t = 0.0;
-                ctx.request_anim_frame();
+                self.on = !self.on;
+                ctx.invalidate();
+                let deadline = Instant::now() + Duration::from_millis(500);
+                self.timer_id = ctx.request_timer(deadline);
             }
-            Event::AnimFrame(interval) => {
-                self.t += (*interval as f64) * 1e-9;
-                if self.t < 1.0 {
-                    ctx.request_anim_frame();
+            Event::Timer(id) => {
+                if *id == self.timer_id {
+                    self.on = !self.on;
+                    ctx.invalidate();
+                    let deadline = Instant::now() + Duration::from_millis(500);
+                    self.timer_id = ctx.request_timer(deadline);
                 }
-                // When we do fine-grained invalidation,
-                // no doubt this will be required:
-                //ctx.invalidate();
             }
             _ => (),
         }
@@ -86,9 +89,12 @@ fn main() {
 
     let mut run_loop = runloop::RunLoop::new();
     let mut builder = WindowBuilder::new();
-    let root = AnimWidget { t: 0.0 };
+    let root = TimerWidget {
+        timer_id: TimerToken::INVALID,
+        on: false,
+    };
     let state = UiState::new(root, 0u32);
-    builder.set_title("Animation example");
+    builder.set_title("Timer example");
     builder.set_handler(Box::new(UiMain::new(state)));
     let window = builder.build().unwrap();
     window.show();

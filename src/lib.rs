@@ -24,7 +24,8 @@ mod lens;
 mod value;
 
 use std::any::Any;
-use std::ops::DerefMut;
+use std::ops::{Deref, DerefMut};
+
 use std::time::Instant;
 
 use kurbo::{Affine, Point, Rect, Shape, Size, Vec2};
@@ -39,7 +40,7 @@ pub use druid_shell::keyboard::{KeyCode, KeyEvent, KeyModifiers};
 #[allow(unused)]
 use druid_shell::platform::IdleHandle;
 use druid_shell::window::{self, Text, WinCtx, WinHandler, WindowHandle};
-pub use druid_shell::window::{Cursor, MouseButton, MouseEvent};
+pub use druid_shell::window::{Cursor, MouseButton, MouseEvent, TimerToken};
 
 pub use data::Data;
 pub use event::{Event, WheelEvent};
@@ -129,6 +130,12 @@ pub struct BaseState {
     /// Any descendant has requested an animation frame.
     request_anim: bool,
 
+    /// Any descendant has requested a timer.
+    ///
+    /// Note: we don't have any way of clearing this request, as it's
+    /// likely not worth the complexity.
+    request_timer: bool,
+
     /// This widget or a descendant has focus.
     has_focus: bool,
 
@@ -178,7 +185,8 @@ pub trait Widget<T> {
     /// Paint the widget appearance.
     ///
     /// The widget calls methods on the `render_ctx` field of the
-    /// `paint_ctx` in order to paint its appearance.
+    /// `paint_ctx` in order to paint its appearance. `paint_ctx` auto
+    /// derefs to `render_ctx` for convenience.
     ///
     /// Container widgets can paint a background before recursing to their
     /// children, or annotations (for example, scrollbars) by painting
@@ -290,12 +298,27 @@ pub struct Env {
 /// A context passed to paint methods of widgets.
 ///
 /// Widgets paint their appearance by calling methods on the
-/// `render_ctx`. This struct is expected to grow, for example to
-/// include the "damage region" indicating that only a subset of
-/// the entire widget hierarchy needs repainting.
+/// `render_ctx`, which PaintCtx derefs to for convenience.
+/// This struct is expected to grow, for example to include the
+/// "damage region" indicating that only a subset of the entire
+/// widget hierarchy needs repainting.
 pub struct PaintCtx<'a, 'b: 'a> {
     /// The render context for actually painting.
     pub render_ctx: &'a mut Piet<'b>,
+}
+
+impl<'a, 'b: 'a> Deref for PaintCtx<'a, 'b> {
+    type Target = Piet<'b>;
+
+    fn deref(&self) -> &Self::Target {
+        self.render_ctx
+    }
+}
+
+impl<'a, 'b: 'a> DerefMut for PaintCtx<'a, 'b> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.render_ctx
+    }
 }
 
 /// A context provided to layout handling methods of widgets.
@@ -426,15 +449,13 @@ impl<T: Data, W: Widget<T>> WidgetPod<T, W> {
     /// Paint the widget, translating it by the origin of its layout rectangle.
     // Discussion: should this be `paint` and the other `paint_raw`?
     pub fn paint_with_offset(&mut self, paint_ctx: &mut PaintCtx, data: &T, env: &Env) {
-        if let Err(e) = paint_ctx.render_ctx.save() {
+        if let Err(e) = paint_ctx.save() {
             eprintln!("error saving render context: {:?}", e);
             return;
         }
-        paint_ctx
-            .render_ctx
-            .transform(Affine::translate(self.state.layout_rect.origin().to_vec2()));
+        paint_ctx.transform(Affine::translate(self.state.layout_rect.origin().to_vec2()));
         self.paint(paint_ctx, data, env);
-        if let Err(e) = paint_ctx.render_ctx.restore() {
+        if let Err(e) = paint_ctx.restore() {
             eprintln!("error restoring render context: {:?}", e);
         }
     }
@@ -540,6 +561,10 @@ impl<T: Data, W: Widget<T>> WidgetPod<T, W> {
                 child_ctx.base_state.request_anim = false;
                 Event::AnimFrame(*interval)
             }
+            Event::Timer(id) => {
+                recurse = child_ctx.base_state.request_timer;
+                Event::Timer(*id)
+            }
         };
         child_ctx.base_state.needs_inval = false;
         if let Some(is_hot) = hot_changed {
@@ -559,6 +584,7 @@ impl<T: Data, W: Widget<T>> WidgetPod<T, W> {
         };
         ctx.base_state.needs_inval |= child_ctx.base_state.needs_inval;
         ctx.base_state.request_anim |= child_ctx.base_state.request_anim;
+        ctx.base_state.request_timer |= child_ctx.base_state.request_timer;
         ctx.base_state.is_hot |= child_ctx.base_state.is_hot;
         ctx.base_state.has_active |= child_ctx.base_state.has_active;
         ctx.base_state.request_focus |= child_ctx.base_state.request_focus;
@@ -772,6 +798,10 @@ impl<T: Data + 'static> WinHandler for UiMain<T> {
         self.state.do_event(event, ctx);
     }
 
+    fn timer(&mut self, token: TimerToken, ctx: &mut dyn WinCtx) {
+        self.state.do_event(Event::Timer(token), ctx);
+    }
+
     fn as_any(&mut self) -> &mut dyn Any {
         self
     }
@@ -973,11 +1003,6 @@ impl<'a, 'b> EventCtx<'a, 'b> {
         self.is_handled
     }
 
-    /// Request an animation frame.
-    pub fn request_anim_frame(&mut self) {
-        self.base_state.request_anim = true;
-    }
-
     /// Query the focus state of the widget.
     ///
     /// See [`BaseState::has_focus`](struct.BaseState.html#method.has_focus).
@@ -990,6 +1015,20 @@ impl<'a, 'b> EventCtx<'a, 'b> {
     /// Discussion question: is method needed in contexts other than event?
     pub fn request_focus(&mut self) {
         self.base_state.request_focus = true;
+    }
+
+    /// Request an animation frame.
+    pub fn request_anim_frame(&mut self) {
+        self.base_state.request_anim = true;
+    }
+
+    /// Request a timer event.
+    ///
+    /// The return value is a token, which can be used to associate the
+    /// request with the event.
+    pub fn request_timer(&mut self, deadline: Instant) -> TimerToken {
+        self.base_state.request_timer = true;
+        self.win_ctx.request_timer(deadline)
     }
 }
 
